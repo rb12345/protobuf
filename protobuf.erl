@@ -1,5 +1,5 @@
 -module(protobuf).
--export([parse_varint/1, parse_message/1, encode_signed/2, decode_signed/1]).
+-export([parse_varint/1, parse_message/1, encode_message/1, encode_signed/2, decode_signed/1]).
 
 % encode_signed/decode_signed - encode and decode signed ints
 
@@ -72,4 +72,56 @@ parse_message_type(_FieldType = 5, FieldNumber, <<ByteString/binary>>) -> % int3
 ;
 parse_message_type(FieldType, FieldNumber, <<ByteString/binary>>) ->
 	[ByteString, [{field_number, FieldNumber}, {field_type, FieldType}]]
+.
+
+% Encode message...
+encode_message(Message) -> encode_messageI(<<>>, Message)
+.
+
+encode_messageI(ByteString, [Field | Message]) ->
+  [{field_number, FieldNumber}, {field_type, FieldType}, {value, Value}] = Field
+  , NewByteString = list_to_bitstring([ByteString, encode_message_type(FieldType, FieldNumber, Value)])
+  , encode_messageI(NewByteString, Message)
+;
+encode_messageI(ByteString, []) ->
+  ByteString
+.
+
+encode_message_type(varint, FieldNumber, Value) -> % varint
+  list_to_bitstring([encode_field_header(FieldNumber, 0), encode_varint(Value)])
+;
+encode_message_type(int64, FieldNumber, Value) -> % int64
+  list_to_bitstring([encode_field_header(FieldNumber, 1), <<Value:64/integer>>])
+;
+encode_message_type(string, FieldNumber, Value) when is_bitstring(Value) -> % string
+  StringLength = byte_size(Value)
+  , List = [encode_field_header(FieldNumber, 2), encode_varint(StringLength), Value]
+  , list_to_bitstring(List)
+;
+encode_message_type(string, FieldNumber, Value) when is_list(Value) -> % string
+  encode_message_type(string, FieldNumber, list_to_bitstring(Value))
+;
+encode_message_type(int32, FieldNumber, Value) -> % int32
+    list_to_bitstring([encode_field_header(FieldNumber, 5), <<Value:32/integer>>])
+;
+encode_message_type(FieldType, FieldNumber, Value) ->
+	<<>>
+.
+
+encode_field_header(FieldNumber, FieldType) -> <<FieldNumber:5/integer,FieldType:3/integer>>
+.
+
+encode_varint(Value) -> encode_varintI(Value, [])
+.
+encode_varintI(Value, List) ->
+  ValueLSB = Value band 16#7F
+  , case Value band 16#80 of
+    16#80 -> % Need to set high bit
+      Chunk = ValueLSB bor 16#80
+      , encode_varintI(Value bsr 7, [List | <<Chunk:8/integer>> ])
+    ; 0 ->
+      ValueLSB = Value band 16#7F
+      , List2 = [List | <<ValueLSB:8/integer>>]
+      , list_to_bitstring(List2)
+    end
 .
